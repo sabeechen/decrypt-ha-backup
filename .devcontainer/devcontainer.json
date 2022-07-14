@@ -1,0 +1,5 @@
+{
+    "build": { "dockerfile": "Dockerfile" },
+    "extensions": ["ms-python.python","ms-python.vscode-pylance"],
+    "forwardPorts": [3000]
+  }
