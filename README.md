@@ -11,19 +11,19 @@ This tool isn't sanctioned by the developers of Home Assistant and isn't updated
 It has been tested on backups created by Home Assistant version 2022.6.7. If you encounter an error using this tool please consider creating an issue for it on GitHub to notify the maintainer, you'll probably be helping many other users if you bring attention to an issue.
 
 ## Installation
-Make sure you have python 3 and pip installed on your system.  Search around on Google for how to install them on your operating system.  Thenf rom the command line: 
+Make sure you have python 3 and pip installed on your system.  Search around on Google for how to install them on your operating system.  Then from the command line: 
 ```bash
 pip install decrypt-ha-backup
 ```
 
 ## Usage
-Download your backup from Home Assistant.  Ensure you have at least twice the free space on your hard drive available, and run:
+Download your backup from Home Assistant.  Ensure you ahve at least twice the size of your backup available on your hard drive, and run:
 ```bash
 python3 -m decrypt-ha-backup /path/to/your/backup.tar
 ```
 
-You will be asked for the backups' password, after being processed the decrypted backup will be placed at ```/path/to/your/Decrypted backup.tar```.
+You will be asked for the backup's password, after being processed the decrypted backup will be placed at ```/path/to/your/Decrypted backup.tar```.
 
 ### Optional Arguments
-- <kbd>--password secret_password</kbd> Pass in the password
-- <kbd>--output_filename /path/to/output.tar</kbd> Specify the output file name 
+- <kbd>--password secret_password</kbd> Specify the the password instead of being asked
+- <kbd>--output_filename /path/to/output.tar</kbd> Specify the output decrypted backup file name 
