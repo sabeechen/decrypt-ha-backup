@@ -9,18 +9,27 @@ import os
 import random
 import getpass
 from typing import IO
-import securetar
 import tempfile
 import platform
 from pathlib import Path
+from .hacked_secure_tar_file import HackedSecureTarFile
 
-#PATH = "EncryptedFolders.tar"
-PATH = "EncryptedFolders.tar"
-PASSWORD = "orcsorcs"
+class FailureError(Exception):
+    """Indicates a failure with a user readable message attached"""
+    
+    def __init__(self, message: str) -> None:
+        """Initialize failure error."""
+        super().__init__(message)
+        self.message = message
+
+    def __str__(self) -> str:
+        """Return string representation of failure error."""
+        return self.message
+
 
 def password_to_key(password: str) -> bytes:
     """Generate a AES Key from password."""
-    key: bytes = password.encode()
+    key: bytes = password.encode("utf-8")
     for _ in range(100):
         key = hashlib.sha256(key).digest()
     return key[:16]
@@ -31,15 +40,8 @@ def key_to_iv(key: bytes) -> bytes:
         key = hashlib.sha256(key).digest()
     return key[:16]
 
-def _generate_iv(key: bytes, salt: bytes) -> bytes:
-    """Generate an iv from data."""
-    temp_iv = key + salt
-    for _ in range(100):
-        temp_iv = hashlib.sha256(temp_iv).digest()
-    return temp_iv[:16]
-
 def overwrite(line: str):
-    sys.stdout.write(f"\r{line}\033[K")
+    sys.stdout.write(f"\r{line.encode('utf-8', 'replace').decode()}\033[K")
 
 def readTarMembers(tar: tarfile.TarFile):
     while(True):
@@ -57,6 +59,8 @@ class Backup:
         except KeyError:
             self._configMember = self._tarfile.getmember("./backup.json")
         json_file = self._tarfile.extractfile(self._configMember)
+        if not json_file:
+            raise FailureError("Backup doesn't contain a metadata file named 'snapshot.json' or 'backup.json'")
         self._config = json.loads(json_file.read())
         json_file.close()
         self._items = [BackupItem(entry['slug'], entry['name'], self) for entry in self._config.get("addons")]
@@ -118,6 +122,8 @@ class BackupItem:
         self._name = name
         self._backup = backup
         self._info = self._backup._tarfile.getmember(self.fileName)
+        if not self._info:
+            raise FailureError(f"Backup file doesn't contain a file for {self._name} with the name '{self.fileName}'")
 
     @property
     def fileName(self):
@@ -141,7 +147,10 @@ class BackupItem:
         return self.info.size
 
     def _open(self):
-        return self._backup._tarfile.extractfile(self.info)
+        data = self._backup._tarfile.extractfile(self.info)
+        if not data:
+            raise FailureError(f"Backup file doesn't contain a file named {self.info.name}")
+        return data
 
     def _extractTo(self, file: IO):
         progress = 0
@@ -154,9 +163,7 @@ class BackupItem:
             file.write(data)
             overwrite(f"Extracting '{self.name}' {round(100 * progress/self.size, 1)}%")
             progress += len(data)
-        file.flush()
         overwrite(f"Extracting '{self.name}' {round(100 * progress/self.size, 1)}%")
-        file.seek(0)
         print()
 
     def _copyTar(self, source: tarfile.TarFile, dest: tarfile.TarFile):
@@ -167,12 +174,13 @@ class BackupItem:
             else:
                 dest.addfile(member, source.extractfile(member))
 
-    def addTo(self, output: tarfile, key: bytes):
-        with tempfile.NamedTemporaryFile() as extracted:
-            self._extractTo(extracted)
-            overwrite(f"Decrypting '{self.name}'")  
-            extracted.seek(0)
-            with securetar.SecureTarFile(Path(extracted.name), "r", key=key, gzip=self._backup.compressed) as decrypted:
+    def addTo(self, temp_folder: str, output: tarfile.TarFile, key: bytes):
+        temp_file = os.path.join(temp_folder, os.urandom(24).hex())
+        try:
+            with open(temp_file, "wb") as f:
+                self._extractTo(f)
+            overwrite(f"Decrypting '{self.name}'")
+            with HackedSecureTarFile(Path(temp_file), key=key, gzip=self._backup.compressed) as decrypted:
                 with tempfile.NamedTemporaryFile() as processed:
                     tarmode = "w|" + ("gz" if self._backup.compressed else "")
                     with tarfile.open(f"{self.slug}.tar", tarmode, fileobj=processed) as archivetar:
@@ -187,6 +195,10 @@ class BackupItem:
                     output.addfile(info, processed)
                     overwrite(f"Saving '{self.name}' done")
                     print()
+        finally:
+            if os.path.isfile(temp_file):
+                os.remove(temp_file)
+            pass
 
 
 def main():
@@ -209,12 +221,13 @@ def main():
         resp = input(f"The output file '{args.output_file}' already exists, do you want to overwrite it [y/n]?")
         if not resp.startswith("y"):
             print("Aborted")
-            exit()
+            exit(1)
 
     if args.password is None:
         # ask fro a password
         args.password = getpass.getpass("Backup Password:")
 
+    temp_dir = tempfile.gettempdir()
     try:
         with tarfile.open(Path(args.backup_file), "r:") as backup_file:
             backup = Backup(backup_file)
@@ -226,10 +239,11 @@ def main():
                 return
 
             _key = password_to_key(args.password)
+            print(_key)
 
             with tarfile.open(args.output_file, "w:") as output:
                 for archive in backup.items:
-                    archive.addTo(output, _key)
+                    archive.addTo(temp_dir, output, _key)
 
                 # Add the modified backup config
                 backup.addModifiedConfig(output)
@@ -238,11 +252,15 @@ def main():
     except tarfile.ReadError as e:
         if "not a gzip file" in str(e):
             print("The file could not be read as a gzip file.  Please ensure your password is correct.")
+        else:
+            raise
+    except FailureError as e:
+        print(e)
+        exit(1)
 
 
 if __name__ == '__main__':
     if platform.system() == 'Windows':
         from ctypes import windll
         windll.kernel32.SetConsoleMode(windll.kernel32.GetStdHandle(-11), 7)
-
     main()
