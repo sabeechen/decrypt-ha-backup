@@ -12,7 +12,7 @@ from typing import IO
 import tempfile
 import platform
 from pathlib import Path
-from hacked_secure_tar_file import HackedSecureTarFile
+from .hacked_secure_tar_file import HackedSecureTarFile
 
 class FailureError(Exception):
     """Indicates a failure with a user readable message attached"""

@@ -10,7 +10,7 @@ setup(
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.9',
     ],
-    packages=find_packages(include=['decrypt-ha-backup']),
+    packages=find_packages(),
     version='2023.10.28.1',
     description='Decryption utility for Home Assistant backups',
     long_description=long_description,
