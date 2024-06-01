@@ -248,7 +248,7 @@ def main():
                 # Add the modified backup config
                 backup.addModifiedConfig(output)
 
-        print(f"Created backup file '{args.backup_file}'")
+        print(f"Created backup file '{args.output_file}'")
     except tarfile.ReadError as e:
         if "not a gzip file" in str(e):
             print("The file could not be read as a gzip file.  Please ensure your password is correct.")
