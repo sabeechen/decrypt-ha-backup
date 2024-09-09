@@ -121,14 +121,14 @@ class BackupItem:
         self._slug = slug
         self._name = name
         self._backup = backup
-        self._info = self._backup._tarfile.getmember(self.fileName)
+        self._info = self._backup._tarfile.getmember(os.path.basename(self.fileName))
         if not self._info:
             raise FailureError(f"Backup file doesn't contain a file for {self._name} with the name '{self.fileName}'")
 
     @property
     def fileName(self):
         ext = ".tar.gz" if self._backup.compressed else ".tar"
-        return f"./{self._slug.replace('/', '_')}{ext}"
+        return f"{self._slug.replace('/', '_')}{ext}"
 
     @property
     def slug(self):
