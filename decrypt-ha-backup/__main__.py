@@ -121,14 +121,19 @@ class BackupItem:
         self._slug = slug
         self._name = name
         self._backup = backup
-        self._info = self._backup._tarfile.getmember(self.fileName)
-        if not self._info:
-            raise FailureError(f"Backup file doesn't contain a file for {self._name} with the name '{self.fileName}'")
 
-    @property
-    def fileName(self):
         ext = ".tar.gz" if self._backup.compressed else ".tar"
-        return f"./{self._slug.replace('/', '_')}{ext}"
+        fileName = f"{self._slug.replace('/', '_')}{ext}"
+
+        try:
+            self._info = self._backup._tarfile.getmember(fileName)
+        except KeyError:
+            # Older versions prepend ./ to the file name
+            fileName = f"./{fileName}"
+            try:
+                self._info = self._backup._tarfile.getmember(fileName)
+            except KeyError:
+                raise FailureError(f"Backup file doesn't contain a file for {self._name} with the name '{self.fileName}'")
 
     @property
     def slug(self):
