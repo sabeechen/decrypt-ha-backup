@@ -63,8 +63,8 @@ class Backup:
             raise FailureError("Backup doesn't contain a metadata file named 'snapshot.json' or 'backup.json'")
         self._config = json.loads(json_file.read())
         json_file.close()
-        self._items = [BackupItem(entry['slug'], entry['name'], self) for entry in self._config.get("addons")]
-        self._items += [BackupItem(entry, self.folderSlugToName(entry), self) for entry in self._config.get("folders")]
+        self._items = [BackupItem(entry['slug'], entry['name'], self) for entry in self._config.get("addons", [])]
+        self._items += [BackupItem(entry, self.folderSlugToName(entry), self) for entry in self._config.get("folders", [])]
 
         if self._config.get('homeassistant') is not None:
             self._items.append(BackupItem('homeassistant', self.folderSlugToName('homeassistant'), self)) 
