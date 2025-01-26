@@ -54,21 +54,25 @@ def readTarMembers(tar: tarfile.TarFile):
 class Backup:
     def __init__(self, tarfile: tarfile.TarFile):
         self._tarfile = tarfile
-        try:
-            self._configMember = self._tarfile.getmember("./snapshot.json")
-        except KeyError:
-            self._configMember = self._tarfile.getmember("./backup.json")
+        self._configMember = None
+        for member in self._tarfile.getmembers():
+            # Note: Very old backups use 'snapshot.json' instead of 'backup.json'
+            if member.name.endswith("snapshot.json") or member.name.endswith("backup.json"):
+                self._configMember = member
+                break
+        
+        if not self._configMember:
+            raise FailureError("Backup doesn't contain a 'backup.json' metadata file.  Ensure this is a Home Assistant Backup.")
         json_file = self._tarfile.extractfile(self._configMember)
         if not json_file:
-            raise FailureError("Backup doesn't contain a metadata file named 'snapshot.json' or 'backup.json'")
+            raise FailureError("Backup doesn't contain a 'backup.json' metadata file.  Ensure this is a Home Assistant Backup.'")
         self._config = json.loads(json_file.read())
         json_file.close()
         self._items = [BackupItem(entry['slug'], entry['name'], self) for entry in self._config.get("addons")]
         self._items += [BackupItem(entry, self.folderSlugToName(entry), self) for entry in self._config.get("folders")]
 
         if self._config.get('homeassistant') is not None:
-            self._items.append(BackupItem('homeassistant', self.folderSlugToName('homeassistant'), self)) 
-
+            self._items.append(BackupItem('homeassistant', self.folderSlugToName('homeassistant'), self))
 
     def folderSlugToName(self, slug):
         if slug == "homeassistant":
@@ -121,14 +125,19 @@ class BackupItem:
         self._slug = slug
         self._name = name
         self._backup = backup
-        self._info = self._backup._tarfile.getmember(self.fileName)
+        for filename in self.filenames:
+            try:
+                self._info = self._backup._tarfile.getmember(filename)
+            except KeyError:
+                continue
         if not self._info:
-            raise FailureError(f"Backup file doesn't contain a file for {self._name} with the name '{self.fileName}'")
+            raise FailureError(f"Backup file doesn't contain a file for {self._name} with file names '{self.filenames}'")
 
+    
     @property
-    def fileName(self):
+    def filenames(self):
         ext = ".tar.gz" if self._backup.compressed else ".tar"
-        return f"./{self._slug.replace('/', '_')}{ext}"
+        return [f"./{self._slug.replace('/', '_')}{ext}", f"{self._slug.replace('/', '_')}{ext}"]
 
     @property
     def slug(self):
