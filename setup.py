@@ -11,7 +11,7 @@ setup(
         'Programming Language :: Python :: 3.10',
     ],
     packages=find_packages(),
-    version='2023.10.28.1',
+    version='2024.01.27.1',
     description='Decryption utility for Home Assistant backups',
     long_description=long_description,
     long_description_content_type="text/markdown",
