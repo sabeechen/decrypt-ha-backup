@@ -1,5 +1,6 @@
 import argparse
 from io import BytesIO
+import io
 import string
 import sys
 import hashlib
@@ -12,7 +13,8 @@ from typing import IO
 import tempfile
 import platform
 from pathlib import Path
-from .hacked_secure_tar_file import HackedSecureTarFile
+
+from .decrypted_stream import DecryptedStream
 
 class FailureError(Exception):
     """Indicates a failure with a user readable message attached"""
@@ -27,21 +29,20 @@ class FailureError(Exception):
         return self.message
 
 
-def password_to_key(password: str) -> bytes:
-    """Generate a AES Key from password."""
-    key: bytes = password.encode("utf-8")
-    for _ in range(100):
-        key = hashlib.sha256(key).digest()
-    return key[:16]
+def size_to_str(size: int) -> str:
+    """Convert a size in bytes to a human readable string."""
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if size < 1024:
+            return f"{size:.2f} {unit}"
+        size /= 1024
+    return f"{size:.2f} PB"
 
-def key_to_iv(key: bytes) -> bytes:
-    """Generate an iv from Key."""
-    for _ in range(100):
-        key = hashlib.sha256(key).digest()
-    return key[:16]
 
 def overwrite(line: str):
     sys.stdout.write(f"\r{line.encode('utf-8', 'replace').decode()}\033[K")
+
+def print_red(text: str):
+    print(f"\033[91m{text}\033[0m")
 
 def readTarMembers(tar: tarfile.TarFile):
     while(True):
@@ -54,39 +55,22 @@ def readTarMembers(tar: tarfile.TarFile):
 class Backup:
     def __init__(self, tarfile: tarfile.TarFile):
         self._tarfile = tarfile
-        try:
-            self._configMember = self._tarfile.getmember("./snapshot.json")
-        except KeyError:
-            self._configMember = self._tarfile.getmember("./backup.json")
+        self._configMember = None
+        self._items: list[BackupItem] = []
+        for member in self._tarfile.getmembers():
+            # Note: Very old backups use 'snapshot.json' instead of 'backup.json'
+            if member.name.endswith("snapshot.json") or member.name.endswith("backup.json"):
+                self._configMember = member
+            elif member.isreg():
+                self._items.append(BackupItem(member, self))
+        
+        if not self._configMember:
+            raise FailureError("Backup doesn't contain a 'backup.json' metadata file.  Ensure this is a Home Assistant Backup.")
         json_file = self._tarfile.extractfile(self._configMember)
         if not json_file:
-            raise FailureError("Backup doesn't contain a metadata file named 'snapshot.json' or 'backup.json'")
+            raise FailureError("Backup doesn't contain a 'backup.json' metadata file.  Ensure this is a Home Assistant Backup.'")
         self._config = json.loads(json_file.read())
         json_file.close()
-        self._items = [BackupItem(entry['slug'], entry['name'], self) for entry in self._config.get("addons")]
-        self._items += [BackupItem(entry, self.folderSlugToName(entry), self) for entry in self._config.get("folders")]
-
-        if self._config.get('homeassistant') is not None:
-            self._items.append(BackupItem('homeassistant', self.folderSlugToName('homeassistant'), self)) 
-
-
-    def folderSlugToName(self, slug):
-        if slug == "homeassistant":
-            return "Config Folder"
-        elif slug == "addons/local":
-            return "Local Add-ons"
-        elif slug == "media":
-            return "Media Folder"
-        elif slug == "share":
-            return "Share Folder"
-        elif slug == "ssl":
-            return "SSL Folder"
-        else:
-            return slug
-
-    @property
-    def compressed(self):
-        return self._config.get("compressed", True)
 
     @property
     def encrypted(self):
@@ -117,88 +101,32 @@ class Backup:
 
 
 class BackupItem:
-    def __init__(self, slug, name, backup: Backup):
-        self._slug = slug
-        self._name = name
+    def __init__(self, tarinfo: tarfile.TarInfo, backup: Backup):
+        self._info = tarinfo
         self._backup = backup
-        self._info = self._backup._tarfile.getmember(self.fileName)
-        if not self._info:
-            raise FailureError(f"Backup file doesn't contain a file for {self._name} with the name '{self.fileName}'")
-
-    @property
-    def fileName(self):
-        ext = ".tar.gz" if self._backup.compressed else ".tar"
-        return f"./{self._slug.replace('/', '_')}{ext}"
-
-    @property
-    def slug(self):
-        return self._slug
-
-    @property
-    def name(self):
-        return self._name
 
     @property
     def info(self) -> tarfile.TarInfo:
         return self._info
+    
+    @property
+    def name(self):
+        return self.info.name
 
     @property
     def size(self):
-        return self.info.size
+        return self.info.size - 16
 
-    def _open(self):
-        data = self._backup._tarfile.extractfile(self.info)
-        if not data:
-            raise FailureError(f"Backup file doesn't contain a file named {self.info.name}")
-        return data
-
-    def _extractTo(self, file: IO):
-        progress = 0
-        encrypted = self._open()
-        overwrite(f"Extracting '{self.name}' 0%")
-        while(True):
-            data = encrypted.read(1024 * 1024)
-            if len(data) == 0:
-                break
-            file.write(data)
-            overwrite(f"Extracting '{self.name}' {round(100 * progress/self.size, 1)}%")
-            progress += len(data)
-        overwrite(f"Extracting '{self.name}' {round(100 * progress/self.size, 1)}%")
+    def addTo(self, output: tarfile.TarFile, password: str):
+        progress_text = f"  {self.name}"
+        overwrite(progress_text)
+        source = self._backup._tarfile.extractfile(self.info)
+        decrypted = DecryptedStream(source, password=password, expected_size=self.size, progress_text=progress_text)
+        new_info = tarfile.TarInfo(name=self.info.name)
+        new_info.size = self.size
+        output.addfile(new_info, decrypted)
+        overwrite(f"  ✅ {self.name} ({size_to_str(self.size)})")
         print()
-
-    def _copyTar(self, source: tarfile.TarFile, dest: tarfile.TarFile):
-        for member in readTarMembers(source):
-            overwrite(f"Decrypting '{self.name}' file '{member.name}'")
-            if not tarfile.TarInfo.isreg(member):
-                dest.addfile(member)
-            else:
-                dest.addfile(member, source.extractfile(member))
-
-    def addTo(self, temp_folder: str, output: tarfile.TarFile, key: bytes):
-        temp_file = os.path.join(temp_folder, os.urandom(24).hex())
-        try:
-            with open(temp_file, "wb") as f:
-                self._extractTo(f)
-            overwrite(f"Decrypting '{self.name}'")
-            with HackedSecureTarFile(Path(temp_file), key=key, gzip=self._backup.compressed) as decrypted:
-                with tempfile.NamedTemporaryFile() as processed:
-                    tarmode = "w|" + ("gz" if self._backup.compressed else "")
-                    with tarfile.open(f"{self.slug}.tar", tarmode, fileobj=processed) as archivetar:
-                        self._copyTar(decrypted, archivetar)
-                    processed.flush()
-                    overwrite(f"Decrypting '{self.name}' done")
-                    print()
-                    info = self.info
-                    info.size = os.stat(processed.name).st_size
-                    processed.seek(0)
-                    overwrite(f"Saving '{self.name}' ...")
-                    output.addfile(info, processed)
-                    overwrite(f"Saving '{self.name}' done")
-                    print()
-        finally:
-            if os.path.isfile(temp_file):
-                os.remove(temp_file)
-            pass
 
 
 def main():
@@ -206,10 +134,11 @@ def main():
     parser.add_argument("backup_file", help='The backup file that should be decrypted')
     parser.add_argument("--output_file", "-o", help='The name of decrypted backup file to be created.  If not specified, it will be chosen based on the backup name.')
     parser.add_argument("--password", "-p", "--pass", help="The password for the backup.  If not specified, you will be prompted for it.")
+    parser.add_argument("--overwite", action="store_true", default=False, help="Overwite output file without confirmation")
     args = parser.parse_args()
 
     if not os.path.exists(args.backup_file):
-        print("The specified backup file couldn't be found")
+        print_red(f"Backup file {args.backup_file} backup file couldn't be found")
         exit()
 
     if args.output_file is None:
@@ -217,17 +146,17 @@ def main():
         parts[-1] = "Decrypted " + parts[-1]
         args.output_file = os.path.join(*parts)
 
-    if os.path.exists(args.output_file):
+    if os.path.exists(args.output_file) and not args.overwite:
         resp = input(f"The output file '{args.output_file}' already exists, do you want to overwrite it [y/n]?")
         if not resp.startswith("y"):
-            print("Aborted")
+            print_red("Aborted")
             exit(1)
 
     if args.password is None:
-        # ask fro a password
+        # ask for password
+        print("Please provide the password used to create this backup.  The password is called 'Encryption Key' in the Home Assistant UI.  Providing the wrong password will result in a corrupted decrypted backup.")
         args.password = getpass.getpass("Backup Password:")
 
-    temp_dir = tempfile.gettempdir()
     try:
         with tarfile.open(Path(args.backup_file), "r:") as backup_file:
             backup = Backup(backup_file)
@@ -238,24 +167,48 @@ def main():
                 print(f"Only backup format 'Version 2' is supported, this backup is 'Version {backup.version}'")
                 return
 
-            _key = password_to_key(args.password)
-            print(_key)
+            print(f"Decrypting {args.backup_file} to {args.output_file}")
 
             with tarfile.open(args.output_file, "w:") as output:
                 for archive in backup.items:
-                    archive.addTo(temp_dir, output, _key)
+                    archive.addTo(output, args.password)
 
                 # Add the modified backup config
                 backup.addModifiedConfig(output)
-
-        print(f"Created backup file '{args.output_file}'")
+        
+        # Read the output file, anything with a tar.gz extension should be readable as a tarfile.
+        print(f"Validating files in {args.output_file}")
+        broken = []
+        with tarfile.open(args.output_file, "r:") as output:
+            for member in readTarMembers(output):
+                if member.name.endswith(".tar.gz"):
+                    try:
+                        overwrite(f"  Checking {member.name}")
+                        with tarfile.open(fileobj=output.extractfile(member), mode="r:gz") as embedded:
+                            for _ in readTarMembers(embedded):
+                                # Do nothing, if its parseable as a tar thats good enough
+                                pass
+                        overwrite(f"  ✅ {member.name}")
+                    except tarfile.ReadError:
+                        broken.append(member.name)
+                        overwrite(f"  ❌ {member.name}")
+                    finally:
+                        print()
+        if broken:
+            print_red(f"{len(broken)} file(s) from the backups couldn't be validated as compressed tar files.  This means that either the provided password was wrong or the original backup is corrupted.")
+        else:
+            print(f"Created dectypted backup '{args.output_file}'")
     except tarfile.ReadError as e:
         if "not a gzip file" in str(e):
-            print("The file could not be read as a gzip file.  Please ensure your password is correct.")
+            print_red("The file could not be read as a gzip file.  Please ensure your password is correct and his is a home assistant backup.")
         else:
             raise
+    except KeyboardInterrupt:
+        print()
+        print_red("Cancelled")
+        exit(1)
     except FailureError as e:
-        print(e)
+        print_red(e)
         exit(1)
 
 
