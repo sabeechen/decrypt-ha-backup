@@ -8,7 +8,7 @@ setup(
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
     ],
     packages=find_packages(),
     version='2023.10.28.1',
@@ -18,5 +18,5 @@ setup(
     install_requires=["cryptography"],
     author="Stephen Beechen",
     author_email="stephen@beechens.com",
-    python_requires=">=3.9",
+    python_requires=">=3.10",
 )
